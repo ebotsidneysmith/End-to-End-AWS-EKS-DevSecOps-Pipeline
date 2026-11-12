@@ -102,6 +102,18 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
 
+      # CLEANUP TRIVY ENVIRONMENT FILE
+      - name: Remove Trivy Envs file
+        if: always()
+        shell: bash
+        run: |
+          if [ -e "trivy_envs.txt" ]; then
+            rm -rf -- trivy_envs.txt
+            echo "Removed trivy_envs.txt successfully."
+          else
+            echo "trivy_envs.txt does not exist. Nothing to remove."
+          fi
+
       # SONARCLOUD
       - name: SonarCloud Analysis and Quality Gate
         working-directory: app
@@ -167,6 +179,18 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
+
+      # CLEANUP TRIVY ENVIRONMENT FILE
+      - name: Remove Trivy Envs file
+        if: always()
+        shell: bash
+        run: |
+          if [ -e "trivy_envs.txt" ]; then
+            rm -rf -- trivy_envs.txt
+            echo "Removed trivy_envs.txt successfully."
+          else
+            echo "trivy_envs.txt does not exist. Nothing to remove."
+          fi
 
       # PUSH TO ECR
       - name: Push Docker Image to Amazon ECR
