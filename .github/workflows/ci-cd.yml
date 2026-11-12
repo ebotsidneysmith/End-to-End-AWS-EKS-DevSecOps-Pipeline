@@ -32,17 +32,41 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Java
+      # Install and configure Java 21
+      - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
+          java-version: "21"
+          architecture: x64
           cache: maven
 
+      # Verify JAVA_HOME and Maven configuration
+      - name: Verify Java and Maven installation
+        shell: bash
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME"
+
+          if [ -z "$JAVA_HOME" ]; then
+            echo "ERROR: JAVA_HOME is not set"
+            exit 1
+          fi
+
+          if [ ! -x "$JAVA_HOME/bin/java" ]; then
+            echo "ERROR: Java executable not found in JAVA_HOME"
+            exit 1
+          fi
+
+          java -version
+          javac -version
+          mvn -version
+
+      # Compile application and run unit tests
       - name: Compile and run unit tests
         working-directory: app
         run: mvn --batch-mode clean verify
 
+      # Upload JaCoCo coverage report
       - name: Upload JaCoCo report
         if: always()
         uses: actions/upload-artifact@v4
@@ -212,11 +236,12 @@ jobs:
           kubectl get pods,services -n dev
 
   # ==========================================
-  # JOB 4: PRODUCTION DEPLOYMENT
+  # JOB 4: DEPLOY TO PRODUCTION EKS
   # ==========================================
 
   deploy_production:
     name: Promote Approved Image to Production EKS
+
     needs:
       - build_scan_push
       - deploy_dev
