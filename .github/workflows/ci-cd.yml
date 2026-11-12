@@ -14,6 +14,8 @@ permissions:
   security-events: write
 
 env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
   JAVA_VERSION: "21"
 
 jobs:
@@ -23,106 +25,90 @@ jobs:
   # ==========================================
 
   verify:
-    name: Compile, Test and Security Analysis
+
+    name: Build, Test and Security Analysis
+
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout source code
+
+      - name: Checkout Source Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # Install Java 21 using setup-java
+      # --------------------------------------
+      # JAVA AND MAVEN
+      # --------------------------------------
+
       - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
           architecture: x64
-          check-latest: true
           cache: maven
 
-      # Verify Java and repair the installation if necessary
-      - name: Verify and repair Java installation
-        shell: bash
-        run: |
-          echo "Checking JAVA_HOME..."
-          echo "JAVA_HOME=$JAVA_HOME"
-
-          if [ -x "$JAVA_HOME/bin/java" ] && \
-             "$JAVA_HOME/bin/java" -version; then
-            echo "Java installation is working."
-          else
-            echo "Java installation is invalid."
-            echo "Installing OpenJDK 21 as a fallback..."
-
-            sudo apt-get update
-            sudo apt-get install -y openjdk-21-jdk
-
-            export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
-
-            if [ ! -x "$JAVA_HOME/bin/java" ]; then
-              echo "ERROR: Java 21 installation failed."
-              exit 1
-            fi
-
-            echo "JAVA_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
-            echo "$JAVA_HOME/bin" >> "$GITHUB_PATH"
-          fi
-
-          echo "Final Java version:"
-          "$JAVA_HOME/bin/java" -version
-
-          echo "Final Java compiler version:"
-          "$JAVA_HOME/bin/javac" -version
-
-      # Verify Maven uses the correct Java installation
-      - name: Verify Maven and Java configuration
+      - name: Verify Java Installation
         run: |
           echo "JAVA_HOME=$JAVA_HOME"
-          echo "PATH=$PATH"
-          which java
-          which mvn
           java -version
-          javac -version
           mvn -version
 
-      # Compile application and run unit tests
-      - name: Compile and run unit tests
-        working-directory: app
-        run: mvn --batch-mode clean verify
+      # --------------------------------------
+      # MAVEN BUILD AND UNIT TESTS
+      # --------------------------------------
 
-      # Upload JaCoCo report
-      - name: Upload JaCoCo report
-        if: always()
+      - name: Build and Run Unit Tests
+        working-directory: app
+        run: |
+          mvn --batch-mode clean verify
+
+      # --------------------------------------
+      # JACOCO CODE COVERAGE
+      # --------------------------------------
+
+      - name: Upload JaCoCo Coverage Report
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: jacoco-report
           path: app/target/site/jacoco/
-          if-no-files-found: ignore
+          if-no-files-found: warn
+          retention-days: 7
 
-      # OWASP dependency vulnerability scan
-      - name: OWASP Dependency-Check
+      # --------------------------------------
+      # OWASP DEPENDENCY CHECK
+      # --------------------------------------
+
+      - name: OWASP Dependency Check
         uses: dependency-check/Dependency-Check_Action@main
+        id: dependency-check
+        env:
+          JAVA_HOME: /opt/jdk
         with:
-          project: store-api
-          path: .
-          format: HTML
-          out: dependency-check-report
+          project: "store-api"
+          path: "."
+          format: "HTML"
+          out: "reports"
           args: >
             --failOnCVSS 7
             --enableRetired
 
-      - name: Upload Dependency-Check report
-        if: always()
+      - name: Upload OWASP Dependency Check Report
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: dependency-check-report
-          path: dependency-check-report/
-          if-no-files-found: ignore
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 7
 
-      # Trivy filesystem scan
-      - name: Trivy filesystem scan
+      # --------------------------------------
+      # TRIVY FILESYSTEM SCAN
+      # --------------------------------------
+
+      - name: Trivy Filesystem Security Scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
@@ -131,10 +117,12 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
-          vuln-type: os,library
 
-      # SonarCloud code quality analysis
-      - name: SonarCloud analysis and quality gate
+      # --------------------------------------
+      # SONARCLOUD ANALYSIS
+      # --------------------------------------
+
+      - name: SonarCloud Analysis and Quality Gate
         working-directory: app
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -146,177 +134,253 @@ jobs:
             -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml \
             -Dsonar.qualitygate.wait=true
 
+
   # ==========================================
-  # JOB 2: BUILD, SCAN AND PUSH DOCKER IMAGE
+  # JOB 2: DOCKER BUILD, SCAN AND PUSH TO ECR
   # ==========================================
 
   build_scan_push:
+
     name: Build, Scan and Push Docker Image
-    needs: verify
-    if: github.event_name != 'pull_request'
+
     runs-on: ubuntu-24.04
 
+    needs: verify
+
     outputs:
-      image_tag: ${{ steps.meta.outputs.image_tag }}
+      image_uri: ${{ steps.build-image.outputs.image_uri }}
 
     steps:
-      - name: Checkout source code
+
+      - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Generate Docker image tag
-        id: meta
-        run: echo "image_tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+      # --------------------------------------
+      # CONFIGURE AWS OIDC
+      # --------------------------------------
 
-      - name: Build Docker image
-        run: |
-          docker build \
-            -t store-api:${{ steps.meta.outputs.image_tag }} .
-
-      # Scan Docker image
-      - name: Trivy Docker image scan
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: store-api:${{ steps.meta.outputs.image_tag }}
-          format: table
-          severity: HIGH,CRITICAL
-          exit-code: "1"
-          ignore-unfixed: true
-          vuln-type: os,library
-
-      # AWS authentication using GitHub OIDC
-      - name: Configure AWS credentials
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      # Amazon ECR login
+      # --------------------------------------
+      # LOGIN TO AMAZON ECR
+      # --------------------------------------
+
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # Push image to ECR
-      - name: Tag and push Docker image
-        env:
-          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          REPOSITORY: ${{ vars.ECR_REPOSITORY }}
-          IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
-        run: |
-          docker tag \
-            "store-api:${IMAGE_TAG}" \
-            "${REGISTRY}/${REPOSITORY}:${IMAGE_TAG}"
+      # --------------------------------------
+      # BUILD DOCKER IMAGE
+      # --------------------------------------
 
-          docker push "${REGISTRY}/${REPOSITORY}:${IMAGE_TAG}"
+      - name: Build Docker Image
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+          docker build \
+            -t "$IMAGE_URI" \
+            .
+
+          echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+
+      # --------------------------------------
+      # TRIVY DOCKER IMAGE SCAN
+      # --------------------------------------
+
+      - name: Trivy Docker Image Scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ steps.build-image.outputs.image_uri }}
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+
+      # --------------------------------------
+      # PUSH IMAGE TO AMAZON ECR
+      # --------------------------------------
+
+      - name: Push Docker Image to Amazon ECR
+        env:
+          IMAGE_URI: ${{ steps.build-image.outputs.image_uri }}
+        run: |
+          docker push "$IMAGE_URI"
 
           echo "Successfully pushed image:"
-          echo "${REGISTRY}/${REPOSITORY}:${IMAGE_TAG}"
+          echo "$IMAGE_URI"
+
 
   # ==========================================
   # JOB 3: DEPLOY TO DEVELOPMENT EKS
   # ==========================================
 
   deploy_dev:
+
     name: Deploy to Development EKS
-    needs: build_scan_push
+
     runs-on: ubuntu-24.04
 
+    needs:
+      - build_scan_push
+
     steps:
-      - name: Checkout source code
+
+      - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
+      # --------------------------------------
+      # CONFIGURE AWS
+      # --------------------------------------
+
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Configure kubectl for development
+      # --------------------------------------
+      # CONFIGURE KUBECTL
+      # --------------------------------------
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: latest
+
+      - name: Update Development EKS Kubeconfig
         run: |
           aws eks update-kubeconfig \
-            --region "${{ vars.AWS_REGION }}" \
+            --region "$AWS_REGION" \
             --name "${{ vars.EKS_DEV_CLUSTER }}"
 
-      - name: Deploy application to development
-        env:
-          AWS_REGION: ${{ vars.AWS_REGION }}
-          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
-          IMAGE_TAG: ${{ needs.build_scan_push.outputs.image_tag }}
+      # --------------------------------------
+      # CREATE DEVELOPMENT NAMESPACE
+      # --------------------------------------
+
+      - name: Create Development Namespace
         run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity \
-            --query Account --output text)
-
-          IMAGE_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${IMAGE_TAG}"
-
           kubectl create namespace dev \
             --dry-run=client -o yaml | kubectl apply -f -
 
-          sed "s|STORE_IMAGE_PLACEHOLDER|${IMAGE_URI}|g" \
-            deploy/base/deployment.yaml | kubectl apply -n dev -f -
+      # --------------------------------------
+      # DEPLOY APPLICATION
+      # --------------------------------------
 
-          kubectl apply -n dev -f deploy/base/service.yaml
+      - name: Deploy Application to Development
+        env:
+          IMAGE_URI: ${{ needs.build_scan_push.outputs.image_uri }}
+        run: |
+          sed "s|STORE_IMAGE_PLACEHOLDER|$IMAGE_URI|g" \
+            deploy/base/deployment.yaml > deployment-dev.yaml
 
-          kubectl set env deployment/store-api APP_ENV=dev -n dev
+          kubectl apply -f deployment-dev.yaml
+
+          kubectl apply -f deploy/base/service.yaml
+
+          kubectl set env deployment/store-api \
+            APP_ENV=dev \
+            -n dev
 
           kubectl rollout status deployment/store-api \
-            -n dev --timeout=180s
+            -n dev \
+            --timeout=300s
 
-          kubectl get pods,services -n dev
+      - name: Verify Development Deployment
+        run: |
+          kubectl get deployments -n dev
+          kubectl get pods -n dev
+          kubectl get services -n dev
+
 
   # ==========================================
   # JOB 4: DEPLOY TO PRODUCTION EKS
   # ==========================================
 
   deploy_production:
-    name: Promote Approved Image to Production EKS
+
+    name: Deploy to Production EKS
+
+    runs-on: ubuntu-24.04
 
     needs:
       - build_scan_push
       - deploy_dev
 
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-
-    runs-on: ubuntu-24.04
-
-    environment: production
+    environment:
+      name: production
 
     steps:
-      - name: Checkout source code
+
+      - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
+      # --------------------------------------
+      # CONFIGURE AWS
+      # --------------------------------------
+
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Configure kubectl for production
+      # --------------------------------------
+      # CONFIGURE KUBECTL
+      # --------------------------------------
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: latest
+
+      - name: Update Production EKS Kubeconfig
         run: |
           aws eks update-kubeconfig \
-            --region "${{ vars.AWS_REGION }}" \
+            --region "$AWS_REGION" \
             --name "${{ vars.EKS_PROD_CLUSTER }}"
 
-      - name: Deploy exact image tested in development
-        env:
-          AWS_REGION: ${{ vars.AWS_REGION }}
-          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
-          IMAGE_TAG: ${{ needs.build_scan_push.outputs.image_tag }}
+      # --------------------------------------
+      # CREATE PRODUCTION NAMESPACE
+      # --------------------------------------
+
+      - name: Create Production Namespace
         run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity \
-            --query Account --output text)
-
-          IMAGE_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${IMAGE_TAG}"
-
           kubectl create namespace prod \
             --dry-run=client -o yaml | kubectl apply -f -
 
-          sed "s|STORE_IMAGE_PLACEHOLDER|${IMAGE_URI}|g" \
-            deploy/base/deployment.yaml | kubectl apply -n prod -f -
+      # --------------------------------------
+      # DEPLOY SAME IMAGE TO PRODUCTION
+      # --------------------------------------
 
-          kubectl apply -n prod -f deploy/base/service.yaml
+      - name: Deploy Application to Production
+        env:
+          IMAGE_URI: ${{ needs.build_scan_push.outputs.image_uri }}
+        run: |
+          sed "s|STORE_IMAGE_PLACEHOLDER|$IMAGE_URI|g" \
+            deploy/base/deployment.yaml > deployment-prod.yaml
 
-          kubectl set env deployment/store-api APP_ENV=prod -n prod
+          kubectl apply -f deployment-prod.yaml
+
+          kubectl apply -f deploy/base/service.yaml
+
+          kubectl set env deployment/store-api \
+            APP_ENV=prod \
+            -n prod
 
           kubectl rollout status deployment/store-api \
-            -n prod --timeout=300s
+            -n prod \
+            --timeout=300s
 
-          kubectl get pods,services -n prod
+      - name: Verify Production Deployment
+        run: |
+          kubectl get deployments -n prod
+          kubectl get pods -n prod
+          kubectl get services -n prod
