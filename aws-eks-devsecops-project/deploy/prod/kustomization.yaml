@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: prod
+resources:
+  - ../base/deployment.yaml
+  - ../base/service.yaml
+# Ingress is intentionally omitted by default. Add ../base/ingress.yaml after configuring DNS/TLS.
+images:
+  - name: STORE_IMAGE_PLACEHOLDER
+    newName: REPLACED_BY_PIPELINE
+    newTag: REPLACED_BY_PIPELINE
+patches:
+  - target:
+      kind: Deployment
+      name: store-api
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/0/value
+        value: prod

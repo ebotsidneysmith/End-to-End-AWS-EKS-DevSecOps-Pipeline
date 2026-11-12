@@ -1,0 +1,196 @@
+name: DevSecOps CI/CD to Amazon EKS
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  security-events: write
+
+env:
+  JAVA_VERSION: "21"
+
+jobs:
+  verify:
+    name: Compile, unit test, dependency and source scan, SonarCloud
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+
+      - name: Compile and unit test with coverage
+        working-directory: app
+        run: mvn --batch-mode clean verify
+
+      - name: Upload JaCoCo report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: app/target/site/jacoco/
+          if-no-files-found: ignore
+
+      - name: OWASP Dependency-Check
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: "store-api"
+          path: "."
+          format: "HTML"
+          out: "dependency-check-report"
+          args: >
+            --failOnCVSS 7
+            --enableRetired
+
+      - name: Upload Dependency-Check report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-report
+          path: dependency-check-report/
+          if-no-files-found: ignore
+
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: SonarCloud analysis and quality gate
+        working-directory: app
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: >
+          mvn --batch-mode sonar:sonar
+          -Dsonar.host.url=https://sonarcloud.io
+          -Dsonar.organization=${{ vars.SONAR_ORGANIZATION }}
+          -Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY }}
+          -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
+          -Dsonar.qualitygate.wait=true
+
+  build_scan_push:
+    name: Build, scan and push Docker image
+    needs: verify
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set image tag
+        id: meta
+        run: echo "image_tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Docker image
+        run: docker build -t store-api:${{ steps.meta.outputs.image_tag }} .
+
+      - name: Trivy Docker image scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: store-api:${{ steps.meta.outputs.image_tag }}
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Configure AWS credentials using GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Tag and push image
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
+        run: |
+          docker tag "store-api:${IMAGE_TAG}" "${REGISTRY}/${REPOSITORY}:${IMAGE_TAG}"
+          docker push "${REGISTRY}/${REPOSITORY}:${IMAGE_TAG}"
+          echo "IMAGE_URI=${REGISTRY}/${REPOSITORY}:${IMAGE_TAG}" >> "$GITHUB_ENV"
+
+  deploy_dev:
+    name: Deploy to development EKS
+    needs: [build_scan_push]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Configure kubectl
+        run: aws eks update-kubeconfig --region "${{ vars.AWS_REGION }}" --name "${{ vars.EKS_DEV_CLUSTER }}"
+
+      - name: Deploy same ECR image to dev
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ needs.build_scan_push.outputs.image_tag }}
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          IMAGE_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${IMAGE_TAG}"
+          kubectl create namespace dev --dry-run=client -o yaml | kubectl apply -f -
+          sed "s|STORE_IMAGE_PLACEHOLDER|${IMAGE_URI}|g" deploy/base/deployment.yaml | kubectl apply -n dev -f -
+          kubectl apply -n dev -f deploy/base/service.yaml
+          kubectl set env deployment/store-api APP_ENV=dev -n dev
+          kubectl rollout status deployment/store-api -n dev --timeout=180s
+          kubectl get pods,svc -n dev
+
+  deploy_production:
+    name: Promote approved image to production EKS
+    needs: [build_scan_push, deploy_dev]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Configure kubectl
+        run: aws eks update-kubeconfig --region "${{ vars.AWS_REGION }}" --name "${{ vars.EKS_PROD_CLUSTER }}"
+
+      - name: Deploy the exact image tested in dev
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ needs.build_scan_push.outputs.image_tag }}
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          IMAGE_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${IMAGE_TAG}"
+          kubectl create namespace prod --dry-run=client -o yaml | kubectl apply -f -
+          sed "s|STORE_IMAGE_PLACEHOLDER|${IMAGE_URI}|g" deploy/base/deployment.yaml | kubectl apply -n prod -f -
+          kubectl apply -n prod -f deploy/base/service.yaml
+          kubectl set env deployment/store-api APP_ENV=prod -n prod
+          kubectl rollout status deployment/store-api -n prod --timeout=300s
+          kubectl get pods,svc -n prod

@@ -1,0 +1,23 @@
+# Optional: requires AWS Load Balancer Controller and suitable subnet/security-group setup.
+# Configure hostname, TLS, and ingress class for your AWS account before enabling.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: store-api
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /actuator/health
+spec:
+  ingressClassName: alb
+  rules:
+    - host: store-api.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: store-api
+                port:
+                  number: 80
