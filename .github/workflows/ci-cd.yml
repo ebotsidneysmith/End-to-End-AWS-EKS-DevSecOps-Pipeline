@@ -25,22 +25,16 @@ jobs:
   # ==========================================
 
   verify:
-
     name: Build, Test and Security Analysis
-
     runs-on: ubuntu-24.04
 
     steps:
-
       - name: Checkout Source Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # --------------------------------------
-      # JAVA AND MAVEN
-      # --------------------------------------
-
+      # JAVA 21
       - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
@@ -55,19 +49,13 @@ jobs:
           java -version
           mvn -version
 
-      # --------------------------------------
-      # MAVEN BUILD AND UNIT TESTS
-      # --------------------------------------
-
+      # MAVEN BUILD AND TEST
       - name: Build and Run Unit Tests
         working-directory: app
         run: |
           mvn --batch-mode clean verify
 
-      # --------------------------------------
-      # JACOCO CODE COVERAGE
-      # --------------------------------------
-
+      # JACOCO COVERAGE REPORT
       - name: Upload JaCoCo Coverage Report
         uses: actions/upload-artifact@v4
         if: always()
@@ -77,10 +65,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      # --------------------------------------
       # OWASP DEPENDENCY CHECK
-      # --------------------------------------
-
       - name: OWASP Dependency Check
         uses: dependency-check/Dependency-Check_Action@main
         id: dependency-check
@@ -88,13 +73,15 @@ jobs:
           JAVA_HOME: /opt/jdk
         with:
           project: "store-api"
-          path: "."
+          path: "app"
           format: "HTML"
           out: "reports"
           args: >
             --failOnCVSS 7
             --enableRetired
+            --suppression /github/workspace/dependency-check-suppressions.xml
 
+      # UPLOAD OWASP REPORT
       - name: Upload OWASP Dependency Check Report
         uses: actions/upload-artifact@v4
         if: always()
@@ -104,10 +91,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      # --------------------------------------
       # TRIVY FILESYSTEM SCAN
-      # --------------------------------------
-
       - name: Trivy Filesystem Security Scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -118,10 +102,7 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
 
-      # --------------------------------------
-      # SONARCLOUD ANALYSIS
-      # --------------------------------------
-
+      # SONARCLOUD
       - name: SonarCloud Analysis and Quality Gate
         working-directory: app
         env:
@@ -140,24 +121,19 @@ jobs:
   # ==========================================
 
   build_scan_push:
-
     name: Build, Scan and Push Docker Image
-
     runs-on: ubuntu-24.04
 
     needs: verify
+
+    if: github.event_name != 'pull_request'
 
     outputs:
       image_uri: ${{ steps.build-image.outputs.image_uri }}
 
     steps:
-
       - name: Checkout Source Code
         uses: actions/checkout@v4
-
-      # --------------------------------------
-      # CONFIGURE AWS OIDC
-      # --------------------------------------
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -165,18 +141,11 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      # --------------------------------------
-      # LOGIN TO AMAZON ECR
-      # --------------------------------------
-
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # --------------------------------------
       # BUILD DOCKER IMAGE
-      # --------------------------------------
-
       - name: Build Docker Image
         id: build-image
         env:
@@ -185,16 +154,11 @@ jobs:
         run: |
           IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
-          docker build \
-            -t "$IMAGE_URI" \
-            .
+          docker build -t "$IMAGE_URI" .
 
           echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
 
-      # --------------------------------------
-      # TRIVY DOCKER IMAGE SCAN
-      # --------------------------------------
-
+      # TRIVY IMAGE SCAN
       - name: Trivy Docker Image Scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -204,18 +168,13 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
 
-      # --------------------------------------
-      # PUSH IMAGE TO AMAZON ECR
-      # --------------------------------------
-
+      # PUSH TO ECR
       - name: Push Docker Image to Amazon ECR
         env:
           IMAGE_URI: ${{ steps.build-image.outputs.image_uri }}
         run: |
           docker push "$IMAGE_URI"
-
-          echo "Successfully pushed image:"
-          echo "$IMAGE_URI"
+          echo "Successfully pushed: $IMAGE_URI"
 
 
   # ==========================================
@@ -223,32 +182,21 @@ jobs:
   # ==========================================
 
   deploy_dev:
-
     name: Deploy to Development EKS
-
     runs-on: ubuntu-24.04
 
     needs:
       - build_scan_push
 
     steps:
-
       - name: Checkout Source Code
         uses: actions/checkout@v4
-
-      # --------------------------------------
-      # CONFIGURE AWS
-      # --------------------------------------
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
-
-      # --------------------------------------
-      # CONFIGURE KUBECTL
-      # --------------------------------------
 
       - name: Set up kubectl
         uses: azure/setup-kubectl@v4
@@ -261,18 +209,10 @@ jobs:
             --region "$AWS_REGION" \
             --name "${{ vars.EKS_DEV_CLUSTER }}"
 
-      # --------------------------------------
-      # CREATE DEVELOPMENT NAMESPACE
-      # --------------------------------------
-
       - name: Create Development Namespace
         run: |
           kubectl create namespace dev \
             --dry-run=client -o yaml | kubectl apply -f -
-
-      # --------------------------------------
-      # DEPLOY APPLICATION
-      # --------------------------------------
 
       - name: Deploy Application to Development
         env:
@@ -281,9 +221,8 @@ jobs:
           sed "s|STORE_IMAGE_PLACEHOLDER|$IMAGE_URI|g" \
             deploy/base/deployment.yaml > deployment-dev.yaml
 
-          kubectl apply -f deployment-dev.yaml
-
-          kubectl apply -f deploy/base/service.yaml
+          kubectl apply -n dev -f deployment-dev.yaml
+          kubectl apply -n dev -f deploy/base/service.yaml
 
           kubectl set env deployment/store-api \
             APP_ENV=dev \
@@ -305,9 +244,7 @@ jobs:
   # ==========================================
 
   deploy_production:
-
     name: Deploy to Production EKS
-
     runs-on: ubuntu-24.04
 
     needs:
@@ -318,23 +255,14 @@ jobs:
       name: production
 
     steps:
-
       - name: Checkout Source Code
         uses: actions/checkout@v4
-
-      # --------------------------------------
-      # CONFIGURE AWS
-      # --------------------------------------
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
-
-      # --------------------------------------
-      # CONFIGURE KUBECTL
-      # --------------------------------------
 
       - name: Set up kubectl
         uses: azure/setup-kubectl@v4
@@ -347,18 +275,10 @@ jobs:
             --region "$AWS_REGION" \
             --name "${{ vars.EKS_PROD_CLUSTER }}"
 
-      # --------------------------------------
-      # CREATE PRODUCTION NAMESPACE
-      # --------------------------------------
-
       - name: Create Production Namespace
         run: |
           kubectl create namespace prod \
             --dry-run=client -o yaml | kubectl apply -f -
-
-      # --------------------------------------
-      # DEPLOY SAME IMAGE TO PRODUCTION
-      # --------------------------------------
 
       - name: Deploy Application to Production
         env:
@@ -367,9 +287,8 @@ jobs:
           sed "s|STORE_IMAGE_PLACEHOLDER|$IMAGE_URI|g" \
             deploy/base/deployment.yaml > deployment-prod.yaml
 
-          kubectl apply -f deployment-prod.yaml
-
-          kubectl apply -f deploy/base/service.yaml
+          kubectl apply -n prod -f deployment-prod.yaml
+          kubectl apply -n prod -f deploy/base/service.yaml
 
           kubectl set env deployment/store-api \
             APP_ENV=prod \
