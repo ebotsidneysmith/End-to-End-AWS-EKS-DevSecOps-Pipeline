@@ -115,7 +115,8 @@ jobs:
           retention-days: 7
 
       
-      # SONARCLOUD ANALYSIS
+     
+      # SONARCLOUD ANALYSIS AND QUALITY GATE
       - name: SonarCloud Analysis and Quality Gate
         working-directory: app
         env:
@@ -143,10 +144,12 @@ jobs:
           echo "SonarCloud organization: $SONAR_ORGANIZATION"
           echo "SonarCloud project: $SONAR_PROJECT_KEY"
 
+          java -version
+
           mvn --batch-mode --no-transfer-progress sonar:sonar \
-            -Dsonar.host.url=https://sonarcloud.io \
             -Dsonar.organization="$SONAR_ORGANIZATION" \
             -Dsonar.projectKey="$SONAR_PROJECT_KEY" \
+            -Dsonar.scanner.skipJreProvisioning=true \
             -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml \
             -Dsonar.qualitygate.wait=true
 
