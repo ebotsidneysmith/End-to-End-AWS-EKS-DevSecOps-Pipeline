@@ -34,15 +34,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      # JAVA 21
-      - name: Set up Java 21
+      # SET UP JAVA 21 AND MAVEN CACHE
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
-          architecture: x64
           cache: maven
+          cache-dependency-path: app/pom.xml
 
+      # VERIFY JAVA AND MAVEN
       - name: Verify Java Installation
         run: |
           echo "JAVA_HOME=$JAVA_HOME"
@@ -53,7 +54,7 @@ jobs:
       - name: Build and Run Unit Tests
         working-directory: app
         run: |
-          mvn --batch-mode clean verify
+          mvn --batch-mode --no-transfer-progress clean verify
 
       # JACOCO COVERAGE REPORT
       - name: Upload JaCoCo Coverage Report
@@ -69,8 +70,6 @@ jobs:
       - name: OWASP Dependency Check
         uses: dependency-check/Dependency-Check_Action@main
         id: dependency-check
-        env:
-          JAVA_HOME: /opt/jdk
         with:
           project: "store-api"
           path: "app"
@@ -102,13 +101,13 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
 
-      # SONARCLOUD
+      # SONARCLOUD ANALYSIS
       - name: SonarCloud Analysis and Quality Gate
         working-directory: app
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
-          mvn --batch-mode sonar:sonar \
+          mvn --batch-mode --no-transfer-progress sonar:sonar \
             -Dsonar.host.url=https://sonarcloud.io \
             -Dsonar.organization=${{ vars.SONAR_ORGANIZATION }} \
             -Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY }} \
@@ -135,12 +134,14 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
+      # AWS OIDC AUTHENTICATION
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      # ECR LOGIN
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
@@ -168,7 +169,7 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
 
-      # PUSH TO ECR
+      # PUSH IMAGE TO ECR
       - name: Push Docker Image to Amazon ECR
         env:
           IMAGE_URI: ${{ steps.build-image.outputs.image_uri }}
@@ -192,28 +193,33 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
+      # AWS OIDC AUTHENTICATION
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      # INSTALL KUBECTL
       - name: Set up kubectl
         uses: azure/setup-kubectl@v4
         with:
           version: latest
 
+      # CONNECT TO DEVELOPMENT EKS
       - name: Update Development EKS Kubeconfig
         run: |
           aws eks update-kubeconfig \
             --region "$AWS_REGION" \
             --name "${{ vars.EKS_DEV_CLUSTER }}"
 
+      # CREATE DEVELOPMENT NAMESPACE
       - name: Create Development Namespace
         run: |
           kubectl create namespace dev \
             --dry-run=client -o yaml | kubectl apply -f -
 
+      # DEPLOY APPLICATION
       - name: Deploy Application to Development
         env:
           IMAGE_URI: ${{ needs.build_scan_push.outputs.image_uri }}
@@ -232,6 +238,7 @@ jobs:
             -n dev \
             --timeout=300s
 
+      # VERIFY DEVELOPMENT DEPLOYMENT
       - name: Verify Development Deployment
         run: |
           kubectl get deployments -n dev
@@ -258,28 +265,33 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
+      # AWS OIDC AUTHENTICATION
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      # INSTALL KUBECTL
       - name: Set up kubectl
         uses: azure/setup-kubectl@v4
         with:
           version: latest
 
+      # CONNECT TO PRODUCTION EKS
       - name: Update Production EKS Kubeconfig
         run: |
           aws eks update-kubeconfig \
             --region "$AWS_REGION" \
             --name "${{ vars.EKS_PROD_CLUSTER }}"
 
+      # CREATE PRODUCTION NAMESPACE
       - name: Create Production Namespace
         run: |
           kubectl create namespace prod \
             --dry-run=client -o yaml | kubectl apply -f -
 
+      # DEPLOY APPLICATION
       - name: Deploy Application to Production
         env:
           IMAGE_URI: ${{ needs.build_scan_push.outputs.image_uri }}
@@ -298,6 +310,7 @@ jobs:
             -n prod \
             --timeout=300s
 
+      # VERIFY PRODUCTION DEPLOYMENT
       - name: Verify Production Deployment
         run: |
           kubectl get deployments -n prod
