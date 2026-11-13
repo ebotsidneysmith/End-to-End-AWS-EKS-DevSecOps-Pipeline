@@ -22,14 +22,13 @@
     <name>store-api</name>
     <description>Spring Boot Store API for AWS EKS DevSecOps Pipeline</description>
 
-    <!-- Java, Security and Plugin Properties -->
+    <!-- Java and Dependency Properties -->
     <properties>
         <java.version>21</java.version>
         <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
-        <!-- Security dependency overrides -->
-        <spring-framework.version>6.2.21</spring-framework.version>
+        <!-- Tomcat security override -->
         <tomcat.version>10.1.61</tomcat.version>
 
         <!-- Code coverage -->
