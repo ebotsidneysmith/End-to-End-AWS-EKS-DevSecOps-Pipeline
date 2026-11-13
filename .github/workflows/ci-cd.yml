@@ -121,7 +121,7 @@ jobs:
       
      
       # SONARCLOUD ANALYSIS AND QUALITY GATE
-      - name: SonarCloud Analysis and Quality Gate
+           - name: SonarCloud Analysis and Quality Gate
         working-directory: app
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -145,18 +145,17 @@ jobs:
             exit 1
           fi
 
-          echo "SonarCloud organization: $SONAR_ORGANIZATION"
-          echo "SonarCloud project: $SONAR_PROJECT_KEY"
-
-          java -version
+          echo "SonarCloud configuration found."
+          echo "Organization: $SONAR_ORGANIZATION"
+          echo "Project: $SONAR_PROJECT_KEY"
 
           mvn --batch-mode --no-transfer-progress sonar:sonar \
+            -Dsonar.token="$SONAR_TOKEN" \
             -Dsonar.organization="$SONAR_ORGANIZATION" \
             -Dsonar.projectKey="$SONAR_PROJECT_KEY" \
             -Dsonar.scanner.skipJreProvisioning=true \
             -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml \
             -Dsonar.qualitygate.wait=true
-
 
 
   # ==========================================
