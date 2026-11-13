@@ -121,7 +121,7 @@ jobs:
       
      
       # SONARCLOUD ANALYSIS AND QUALITY GATE
-           - name: SonarCloud Analysis and Quality Gate
+      - name: SonarCloud Analysis and Quality Gate
         working-directory: app
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
