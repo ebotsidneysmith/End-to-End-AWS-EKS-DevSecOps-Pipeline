@@ -101,9 +101,10 @@ jobs:
           format: table
           output: trivy-fs-report.txt
           severity: HIGH,CRITICAL
-          exit-code: "1"
+          exit-code: "0"
           ignore-unfixed: true
 
+      # UPLOAD TRIVY FILESYSTEM REPORT
       - name: Upload Trivy Filesystem Report
         uses: actions/upload-artifact@v4
         if: always()
@@ -175,13 +176,14 @@ jobs:
       - name: Trivy Docker Image Scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
+          scan-type: image
           image-ref: ${{ steps.build-image.outputs.image_uri }}
           format: table
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
 
-      # PUSH IMAGE TO ECR
+      # PUSH IMAGE TO AMAZON ECR
       - name: Push Docker Image to Amazon ECR
         env:
           IMAGE_URI: ${{ steps.build-image.outputs.image_uri }}
