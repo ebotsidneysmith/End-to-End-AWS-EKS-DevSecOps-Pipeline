@@ -99,9 +99,19 @@ jobs:
           scan-type: fs
           scan-ref: .
           format: table
+          output: trivy-fs-report.txt
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
+
+      - name: Upload Trivy Filesystem Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-filesystem-report
+          path: trivy-fs-report.txt
+          if-no-files-found: warn
+          retention-days: 7
 
       # SONARCLOUD ANALYSIS
       - name: SonarCloud Analysis and Quality Gate
