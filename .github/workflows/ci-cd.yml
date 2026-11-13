@@ -66,6 +66,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      
       # OWASP DEPENDENCY CHECK
       - name: OWASP Dependency Check
         uses: dependency-check/Dependency-Check_Action@main
@@ -80,6 +81,8 @@ jobs:
           args: >
             --failOnCVSS 7
             --enableRetired
+            --connectiontimeout 30000
+            --readtimeout 120000
             --suppression /github/workspace/dependency-check-suppressions.xml
 
       # UPLOAD OWASP REPORT
@@ -91,6 +94,7 @@ jobs:
           path: reports/
           if-no-files-found: warn
           retention-days: 7
+
 
       # TRIVY FILESYSTEM SCAN
       - name: Trivy Filesystem Security Scan
