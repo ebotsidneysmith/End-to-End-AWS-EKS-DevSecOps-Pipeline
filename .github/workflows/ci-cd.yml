@@ -73,6 +73,7 @@ jobs:
         id: dependency-check
         env:
           JAVA_HOME: /opt/jdk
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         with:
           project: "store-api"
           path: "app"
@@ -83,6 +84,7 @@ jobs:
             --enableRetired
             --connectiontimeout 30000
             --readtimeout 120000
+            --nvdApiKey ${{ secrets.NVD_API_KEY }}
             --suppression /github/workspace/dependency-check-suppressions.xml
 
       # UPLOAD OWASP REPORT
